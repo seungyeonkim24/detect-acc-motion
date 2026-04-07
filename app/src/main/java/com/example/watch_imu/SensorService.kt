@@ -21,24 +21,6 @@ import androidx.core.app.NotificationCompat
  *   Sampling Rate : 50Hz (20ms 간격)
  *   Window Size   : 250샘플 (5초)
  *   Hop (스텝)    : 50샘플  (1초마다 추론)
- *
- * 오탐 방지 필터 (3단계):
- *
- *   [Step 1] 후보 등록 / 카운터 누적
- *     - 0.5 미만                     → 노이즈, 후보 초기화
- *     - 0.5 이상 & 같은 활동         → 카운터 누적
- *     - 0.5 이상 & 다른 활동이 연속 2번 → 후보 교체 & 카운터 리셋
- *       (1번짜리 노이즈는 후보 교체 안 함 — 전환 중 Walking 끼어들기 방지)
- *
- *   [Step 2] 카운터 충족 확인
- *     - CONFIRM_COUNT(2)번 미만       → 미확정, 대기
- *
- *   [Step 3] 확정 임계값 확인
- *     - 카운터 누적 중 0.9 이상이 1번이라도 있었으면 → 확정
- *     - 한 번도 0.9를 안 넘었으면    → 대기 (jogging→walking 오탐 0.88 차단)
- *
- * 디버깅:
- *   모든 추론 결과를 CSV에 기록 (confirmed=0: 미확정, confirmed=1: 확정)
  */
 class SensorService : Service(), SensorEventListener {
 
@@ -50,20 +32,6 @@ class SensorService : Service(), SensorEventListener {
     private val WINDOW_SIZE = 250       // 50Hz × 5초
     private val HOP_SIZE    = 50        // 50Hz × 1초 (1초마다 추론)
     private var hopCounter  = 0
-
-    // 오탐 방지
-    //   ACCUMULATE_THRESHOLD : 이 확률 이상이면 카운터 누적 대상 (미만은 노이즈)
-    //   CONFIRM_THRESHOLD    : 카운터 누적 중 1번이라도 이 확률을 넘어야 최종 확정
-    //   DIFFERENT_THRESHOLD  : 다른 활동이 연속 이 횟수만큼 나와야 후보 교체 (1프레임 노이즈 차단)
-    private val ACCUMULATE_THRESHOLD = 0.5f   // 카운터 누적 기준
-    private val CONFIRM_THRESHOLD    = 0.9f   // 확정 기준 (jogging→walking 오탐 0.88 차단)
-    private val CONFIRM_COUNT        = 2      // 확정에 필요한 연속 횟수
-    private val DIFFERENT_THRESHOLD  = 2      // 후보 교체에 필요한 연속 횟수
-    private var lastCandidate        = ""     // 현재 후보 활동
-    private var consecutiveCount     = 0     // 후보 연속 횟수
-    private var differentCount       = 0     // 다른 활동 연속 횟수 (후보 교체 판단용)
-    private var hadHighConfidence    = false  // 카운터 누적 중 0.9 이상이 1번이라도 있었는지
-    private var confirmedActivity    = ""    // 최종 확정된 활동
 
     private val CHANNEL_ID      = "activity_recognition_channel"
     private val NOTIFICATION_ID = 1
@@ -142,75 +110,18 @@ class SensorService : Service(), SensorEventListener {
 
         Log.d(TAG, "─────────────────────────────────────")
         Log.d(TAG, "추론: $activity (확률: ${"%.3f".format(maxProb)})")
-        Log.d(TAG, "Walking:${"%.3f".format(probs[0])} Jogging:${"%.3f".format(probs[1])} " +
-                "Sitting:${"%.3f".format(probs[2])} Standing:${"%.3f".format(probs[3])}")
+        Log.d(TAG, "Walking:${"%.3f".format(probs[0])} " +
+                "Sitting:${"%.3f".format(probs[1])} Standing:${"%.3f".format(probs[2])}")
 
-        // ── 오탐 방지 필터 ────────────────────────────────────
-
-        // Step 1: 후보 등록 / 카운터 누적
-        if (maxProb < ACCUMULATE_THRESHOLD) {
-            // 0.5 미만 노이즈 → 전부 초기화
-            Log.d(TAG, "⚠️ 노이즈 (${maxProb} < $ACCUMULATE_THRESHOLD) → 후보 초기화")
-            lastCandidate     = ""
-            consecutiveCount  = 0
-            differentCount    = 0
-            hadHighConfidence = false
-            CsvLogger.log(this, activity, confirmedActivity, false, probs, features)
-            return
-
-        } else if (activity == lastCandidate) {
-            // 같은 활동 → 카운터 누적, differentCount 리셋
-            consecutiveCount++
-            differentCount = 0
-            if (maxProb >= CONFIRM_THRESHOLD) hadHighConfidence = true
-            Log.d(TAG, "카운터 누적: $consecutiveCount / $CONFIRM_COUNT " +
-                    "(후보: $lastCandidate, 확률: ${"%.3f".format(maxProb)}, highConf: $hadHighConfidence)")
-
-        } else {
-            // 다른 활동 → differentCount 누적, DIFFERENT_THRESHOLD 도달 시 후보 교체
-            differentCount++
-            Log.d(TAG, "다른 활동 감지: $activity (${differentCount}/${DIFFERENT_THRESHOLD}번째, 확률: ${"%.3f".format(maxProb)})")
-            if (differentCount >= DIFFERENT_THRESHOLD) {
-                Log.d(TAG, "후보 교체: $lastCandidate → $activity")
-                lastCandidate     = activity
-                consecutiveCount  = differentCount   // 이미 연속으로 본 횟수 반영
-                differentCount    = 0
-                hadHighConfidence = maxProb >= CONFIRM_THRESHOLD
-            }
-            CsvLogger.log(this, activity, confirmedActivity, false, probs, features)
-            return
-        }
-
-        // Step 2: 카운터 미충족 → 아직 미확정
-        if (consecutiveCount < CONFIRM_COUNT) {
-            Log.d(TAG, "⏳ 아직 미확정 → 이전 활동 유지: $confirmedActivity")
-            CsvLogger.log(this, activity, confirmedActivity, false, probs, features)
-            return
-        }
-
-        // Step 3: 카운터 충족 → 누적 중 0.9 이상이 1번이라도 있었는지 확인
-        if (!hadHighConfidence) {
-            Log.d(TAG, "⏳ 카운터 충족이나 0.9 이상 추론 없음 → 대기 (오탐 차단)")
-            CsvLogger.log(this, activity, confirmedActivity, false, probs, features)
-            return
-        }
-
-        // ── 활동 확정 ─────────────────────────────────────────
-        confirmedActivity = activity
-        consecutiveCount  = 0     // 확정 후 카운터 리셋
-        hadHighConfidence = false  // 다음 후보를 위해 초기화
-
-        Log.d(TAG, "✅ 활동 확정: $confirmedActivity")
-
-        // 확정 추론 CSV 기록 (confirmed=1)
-        CsvLogger.log(this, confirmedActivity, confirmedActivity, true, probs, features)
+        // CSV 기록
+        CsvLogger.log(this, activity, probs, features)
         Log.d(TAG, "CSV 저장 완료")
 
         // 알림 업데이트
-        updateNotification(confirmedActivity)
+        updateNotification(activity)
 
         // UI 콜백 전달
-        onActivityDetected?.invoke(confirmedActivity, probs)
+        onActivityDetected?.invoke(activity, probs)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) { }

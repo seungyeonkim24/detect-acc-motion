@@ -12,11 +12,10 @@ import org.tensorflow.lite.support.common.FileUtil
  *   - activity_model.tflite  (Python train.py로 생성)
  *   - scaler_params.json     (Python train.py로 생성)
  *
- * 분류 대상 (4개):
+ * 분류 대상 (3개):
  *   0: Walking
- *   1: Jogging
- *   2: Sitting
- *   3: Standing
+ *   1: Sitting
+ *   2: Standing
  */
 class ActivityClassifier(context: Context) {
 
@@ -24,7 +23,7 @@ class ActivityClassifier(context: Context) {
     private val mean: FloatArray
     private val scale: FloatArray
 
-    val labels = listOf("Walking", "Jogging", "Sitting", "Standing")
+    val labels = listOf("Walking", "Sitting", "Standing")
 
     init {
         // TFLite 모델 로드
@@ -55,7 +54,7 @@ class ActivityClassifier(context: Context) {
 
     /**
      * 각 클래스의 확률값도 함께 반환합니다.
-     * @return Pair(활동명, FloatArray(4) 확률)
+     * @return Pair(활동명, FloatArray(3) 확률)
      */
     fun classifyWithProb(rawFeatures: FloatArray): Pair<String, FloatArray> {
         // StandardScaler 정규화 (Python 학습 시와 동일하게 적용)
@@ -64,7 +63,7 @@ class ActivityClassifier(context: Context) {
         }
 
         val input  = Array(1) { scaled }          // [1, 43]
-        val output = Array(1) { FloatArray(4) }   // [1, 4]
+        val output = Array(1) { FloatArray(3) }   // [1, 3]
         interpreter.run(input, output)
 
         val probs  = output[0]

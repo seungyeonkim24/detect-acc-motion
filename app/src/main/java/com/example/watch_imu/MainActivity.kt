@@ -251,7 +251,6 @@ fun InfoRow(label: String, value: String) {
 fun currentActivityEmoji(activity: String): String {
     return when (activity) {
         "Walking"  -> "🚶"
-        "Jogging"  -> "🏃"
         "Sitting"  -> "🪑"
         "Standing" -> "🧍"
         else       -> "⏳"
