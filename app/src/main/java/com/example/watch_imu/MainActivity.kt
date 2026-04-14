@@ -10,7 +10,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,15 +25,14 @@ import androidx.wear.compose.material.Text
 class MainActivity : ComponentActivity() {
 
     // UI 상태
-    private var isRunning       = mutableStateOf(false)
-    private var currentActivity = mutableStateOf("측정 대기")
-    private var elapsedSeconds  = mutableStateOf(0)
-    private var windowCount     = mutableStateOf(0)
+    private var isRunning      = mutableStateOf(false)
+    private var elapsedSeconds = mutableStateOf(0)
+    private var windowCount    = mutableStateOf(0)
 
     // 경과 시간 타이머
     private var timerThread: Thread? = null
 
-    // Wake Lock — 화면이 꺼지지 않도록 유지
+    // Wake Lock
     private var wakeLock: PowerManager.WakeLock? = null
 
     // 런타임 권한 요청
@@ -44,26 +42,22 @@ class MainActivity : ComponentActivity() {
         val allGranted = permissions.values.all { it }
         if (allGranted) {
             startSensorService()
-        } else {
-            currentActivity.value = "권한 필요"
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // SensorService 콜백 연결
-        SensorService.onActivityDetected = { activity, _ ->
+        // SensorService 콜백 연결 (피처 43개 수신)
+        SensorService.onFeaturesExtracted = { _ ->
             runOnUiThread {
-                currentActivity.value = activity
                 windowCount.value++
             }
         }
 
         setContent {
-            ActivityApp(
+            CollectionApp(
                 isRunning      = isRunning.value,
-                activityLabel  = currentActivity.value,
                 elapsedSeconds = elapsedSeconds.value,
                 windowCount    = windowCount.value,
                 onStart        = { checkPermissionsAndStart() },
@@ -71,8 +65,6 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
-
-    // ── 권한 확인 및 서비스 시작 ──────────────────────────────
 
     private fun checkPermissionsAndStart() {
         val permissions = arrayOf(
@@ -97,19 +89,18 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, SensorService::class.java)
         startForegroundService(intent)
 
-        isRunning.value       = true
-        elapsedSeconds.value  = 0
-        windowCount.value     = 0
-        currentActivity.value = "감지 중..."
+        isRunning.value      = true
+        elapsedSeconds.value = 0
+        windowCount.value    = 0
 
-        // Wake Lock 획득 — 화면 켜진 상태 유지
+        // Wake Lock 획득
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "watch_imu:sensor_collection"
         ).also { it.acquire() }
 
-        // 경과 시간 타이머 시작
+        // 경과 시간 타이머
         timerThread = Thread {
             while (isRunning.value) {
                 Thread.sleep(1000)
@@ -122,11 +113,9 @@ class MainActivity : ComponentActivity() {
         val intent = Intent(this, SensorService::class.java)
         stopService(intent)
 
-        isRunning.value       = false
-        currentActivity.value = "측정 대기"
-        timerThread           = null
+        isRunning.value = false
+        timerThread     = null
 
-        // Wake Lock 해제
         wakeLock?.let {
             if (it.isHeld) it.release()
         }
@@ -135,20 +124,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Wake Lock 해제 (앱 강제 종료 시 대비)
         wakeLock?.let {
             if (it.isHeld) it.release()
         }
-        SensorService.onActivityDetected = null
+        SensorService.onFeaturesExtracted = null
     }
 }
 
 // ── UI ────────────────────────────────────────────────────────
 
 @Composable
-fun ActivityApp(
+fun CollectionApp(
     isRunning: Boolean,
-    activityLabel: String,
     elapsedSeconds: Int,
     windowCount: Int,
     onStart: () -> Unit,
@@ -167,12 +154,11 @@ fun ActivityApp(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text      = "측정 대기",
+                    text      = "IMU 수집",
                     fontSize  = 18.sp,
                     color     = Color.White,
                     textAlign = TextAlign.Center
                 )
-
                 Button(
                     onClick  = onStart,
                     colors   = ButtonDefaults.buttonColors(
@@ -196,14 +182,14 @@ fun ActivityApp(
                 modifier = Modifier.padding(12.dp)
             ) {
                 Text(
-                    text      = currentActivityEmoji(activityLabel),
+                    text      = "⏳",
                     fontSize  = 30.sp,
                     textAlign = TextAlign.Center,
                     color     = Color.White
                 )
 
                 Text(
-                    text      = activityLabel,
+                    text      = "수집 중",
                     fontSize  = 18.sp,
                     color     = Color.White,
                     textAlign = TextAlign.Center
@@ -245,15 +231,6 @@ fun InfoRow(label: String, value: String) {
     ) {
         Text(text = label, fontSize = 12.sp, color = Color(0xFFAAAAAA))
         Text(text = value, fontSize = 14.sp, color = Color.White)
-    }
-}
-
-fun currentActivityEmoji(activity: String): String {
-    return when (activity) {
-        "Walking"  -> "🚶"
-        "Sitting"  -> "🪑"
-        "Standing" -> "🧍"
-        else       -> "⏳"
     }
 }
 

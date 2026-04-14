@@ -8,32 +8,30 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 활동 인식 결과를 CSV 파일로 저장합니다.
+ * IMU 43개 피처를 CSV 파일로 저장합니다.
  *
- * 저장 경로: /sdcard/Android/data/com.example.watch_imu/files/activity_log_yyyyMMdd_HHmmss.csv
+ * 저장 경로: /sdcard/Android/data/com.example.watch_imu/files/imu_features_yyyyMMdd_HHmmss.csv
  * 수집 시작 시각이 파일명에 포함되어 세션마다 새 파일이 생성됩니다.
  *
- * 컬럼 구성 (총 50개):
- *   timestamp          — 날짜/시각 (문자열)
- *   unix_time          — 밀리초 단위 유닉스 타임
- *   predicted_activity — 추론된 활동명
- *   prob_walking       — Walking 확률
- *   prob_sitting       — Sitting 확률
- *   prob_standing      — Standing 확률
- *   feat_00~feat_42    — 43개 피처값
+ * 컬럼 구성 (총 45개):
+ *   timestamp   — 날짜/시각 (문자열)
+ *   unix_time   — 밀리초 단위 유닉스 타임
+ *   feat_00~feat_42 — 43개 피처값
+ *
+ * 변경사항:
+ *   predicted_activity, prob_* 컬럼 제거
+ *   TFLite 추론 없이 피처만 저장
  */
 object CsvLogger {
 
     private val rowDateFormat  = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault())
     private val fileNameFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
-    // 현재 세션의 파일 (init() 호출 시 결정)
     private var currentFile: File? = null
 
-    // 헤더 (50개 컬럼)
+    // 헤더 (45개 컬럼)
     private val HEADER = buildString {
-        append("timestamp,unix_time,predicted_activity,")
-        append("prob_walking,prob_sitting,prob_standing,")
+        append("timestamp,unix_time,")
         append((0..42).joinToString(",") { "feat_${it.toString().padStart(2, '0')}" })
     }
 
@@ -43,7 +41,7 @@ object CsvLogger {
      */
     fun init(context: Context) {
         val timestamp = fileNameFormat.format(Date())
-        val fileName  = "activity_log_${timestamp}.csv"
+        val fileName  = "imu_features_${timestamp}.csv"
         val dir       = context.getExternalFilesDir(null) ?: context.filesDir
         currentFile   = File(dir, fileName)
         FileWriter(currentFile!!, false).use { it.write(HEADER + "\n") }
@@ -52,18 +50,14 @@ object CsvLogger {
     /**
      * 한 행 기록
      *
-     * @param context           Context
-     * @param predictedActivity 이번 추론에서 나온 활동명
-     * @param probs             FloatArray(3) — Walking, Sitting, Standing 순서
-     * @param features          FloatArray(43) — 43개 피처값
+     * @param context  Context
+     * @param features FloatArray(43) — 43개 피처값
      */
     fun log(
         context: Context,
-        predictedActivity: String,
-        probs: FloatArray,
         features: FloatArray
     ) {
-        val file = currentFile ?: return  // init() 미호출 시 무시
+        val file = currentFile ?: return
 
         val now       = System.currentTimeMillis()
         val timestamp = rowDateFormat.format(Date(now))
@@ -71,9 +65,6 @@ object CsvLogger {
         val row = buildString {
             append("$timestamp,")
             append("$now,")
-            append("$predictedActivity,")
-            append(probs.joinToString(",") { "%.4f".format(it) })
-            append(",")
             append(features.joinToString(",") { "%.6f".format(it) })
         }
 

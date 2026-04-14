@@ -20,20 +20,22 @@ import androidx.core.app.NotificationCompat
  * 설계:
  *   Sampling Rate : 50Hz (20ms 간격)
  *   Window Size   : 250샘플 (5초)
- *   Hop (스텝)    : 50샘플  (1초마다 추론)
+ *   Hop (스텝)    : 50샘플  (1초마다 피처 추출)
+ *
+ * 변경사항:
+ *   TFLite 추론 제거 → 43개 피처만 CSV로 저장
  */
 class SensorService : Service(), SensorEventListener {
 
     private lateinit var sensorManager: SensorManager
-    private lateinit var classifier: ActivityClassifier
 
     // 슬라이딩 윈도우 버퍼 (최근 250개 유지)
     private val buffer      = ArrayDeque<FloatArray>()
     private val WINDOW_SIZE = 250       // 50Hz × 5초
-    private val HOP_SIZE    = 50        // 50Hz × 1초 (1초마다 추론)
+    private val HOP_SIZE    = 50        // 50Hz × 1초 (1초마다 피처 추출)
     private var hopCounter  = 0
 
-    private val CHANNEL_ID      = "activity_recognition_channel"
+    private val CHANNEL_ID      = "imu_feature_channel"
     private val NOTIFICATION_ID = 1
     private val TAG             = "WatchIMU"
 
@@ -42,7 +44,8 @@ class SensorService : Service(), SensorEventListener {
     private var checkStartTime = 0L
 
     companion object {
-        var onActivityDetected: ((String, FloatArray) -> Unit)? = null
+        // 피처 43개를 UI로 전달하는 콜백
+        var onFeaturesExtracted: ((FloatArray) -> Unit)? = null
     }
 
     override fun onCreate() {
@@ -50,17 +53,13 @@ class SensorService : Service(), SensorEventListener {
 
         // 1. 포그라운드 서비스 시작
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("감지 중..."))
+        startForeground(NOTIFICATION_ID, buildNotification())
 
-        // 2. 분류기 초기화
-        classifier = ActivityClassifier(this)
-        Log.d(TAG, "ActivityClassifier 초기화 완료")
-
-        // 3. CSV 로거 초기화
+        // 2. CSV 로거 초기화
         CsvLogger.init(this)
         Log.d(TAG, "CsvLogger 초기화 완료 — 저장 경로: ${CsvLogger.getFilePath(this)}")
 
-        // 4. 가속도계 등록 (20ms = 50Hz)
+        // 3. 가속도계 등록 (20ms = 50Hz)
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorManager.registerListener(this, accel, 20_000)
@@ -88,7 +87,7 @@ class SensorService : Service(), SensorEventListener {
         buffer.addLast(floatArrayOf(event.values[0], event.values[1], event.values[2]))
         if (buffer.size > WINDOW_SIZE) buffer.removeFirst()
 
-        // HOP_SIZE(50샘플 = 1초)마다 추론
+        // HOP_SIZE(50샘플 = 1초)마다 피처 추출
         hopCounter++
         if (hopCounter < HOP_SIZE) return
         hopCounter = 0
@@ -104,24 +103,14 @@ class SensorService : Service(), SensorEventListener {
         // 피처 추출 (43개)
         val features = FeatureExtractor.extract(window)
 
-        // TFLite 추론
-        val (activity, probs) = classifier.classifyWithProb(features)
-        val maxProb = probs.max()
-
-        Log.d(TAG, "─────────────────────────────────────")
-        Log.d(TAG, "추론: $activity (확률: ${"%.3f".format(maxProb)})")
-        Log.d(TAG, "Walking:${"%.3f".format(probs[0])} " +
-                "Sitting:${"%.3f".format(probs[1])} Standing:${"%.3f".format(probs[2])}")
+        Log.d(TAG, "피처 추출 완료 (43개)")
 
         // CSV 기록
-        CsvLogger.log(this, activity, probs, features)
+        CsvLogger.log(this, features)
         Log.d(TAG, "CSV 저장 완료")
 
-        // 알림 업데이트
-        updateNotification(activity)
-
         // UI 콜백 전달
-        onActivityDetected?.invoke(activity, probs)
+        onFeaturesExtracted?.invoke(features)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) { }
@@ -129,7 +118,6 @@ class SensorService : Service(), SensorEventListener {
     override fun onDestroy() {
         super.onDestroy()
         sensorManager.unregisterListener(this)
-        classifier.close()
         stopForeground(STOP_FOREGROUND_REMOVE)
         Log.d(TAG, "SensorService 종료")
     }
@@ -141,24 +129,19 @@ class SensorService : Service(), SensorEventListener {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "Activity Recognition",
+            "IMU Feature Collection",
             NotificationManager.IMPORTANCE_LOW
-        ).apply { description = "활동 인식 실행 중" }
+        ).apply { description = "IMU 피처 수집 중" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun buildNotification(activity: String): Notification {
+    private fun buildNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Activity Recognition")
-            .setContentText("현재 활동: $activity")
+            .setContentTitle("IMU Feature Collection")
+            .setContentText("43개 피처 수집 중...")
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setOngoing(true)
             .setSilent(true)
             .build()
-    }
-
-    private fun updateNotification(activity: String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID, buildNotification(activity))
     }
 }
